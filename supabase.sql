@@ -79,3 +79,20 @@ CREATE TABLE public.shopping_carts (
   CONSTRAINT shopping_carts_sku_fkey FOREIGN KEY (sku) REFERENCES public.products(sku),
   CONSTRAINT shopping_carts_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id)
 );
+CREATE TABLE public.langgraph_checkpoints (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),                         -- Unique checkpoint ID
+  user_id text NOT NULL,                                               -- Link to the user (from cart_sessions / orders)
+  session_id text NOT NULL,                                            -- Link to session (from cart_sessions)
+  state jsonb NOT NULL,                                                -- Stores LangGraph state (memory, messages, etc.)
+  created_at timestamp with time zone DEFAULT now(),                   -- When this checkpoint was created
+  updated_at timestamp with time zone DEFAULT now(),                   -- Last updated timestamp
+  step_index integer DEFAULT 0,                                        -- Optional: Step in multi-step flows
+  status text DEFAULT 'active'::text CHECK (status = ANY (             -- Flow status
+    ARRAY['active', 'completed', 'expired', 'error']
+  )),
+  CONSTRAINT langgraph_checkpoints_pkey PRIMARY KEY (id),
+  CONSTRAINT langgraph_checkpoints_user_id_fkey 
+    FOREIGN KEY (user_id) REFERENCES public.cart_sessions(user_id),
+  CONSTRAINT langgraph_checkpoints_session_id_fkey 
+    FOREIGN KEY (session_id) REFERENCES public.cart_sessions(session_id)
+);
