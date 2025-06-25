@@ -1,3 +1,4 @@
 ShopifyAPI
 langchain
 langgraph
+supabase
