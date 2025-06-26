@@ -1,10 +1,21 @@
-from typing import List, Dict, TypedDict, Optional
+from typing import List, Dict, TypedDict, Optional, Literal
 from langchain.tools import tool
 from supabase import create_client
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import uuid
+from langchain_core.tools import tool
+from langchain_groq import ChatGroq
+from typing import Annotated
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.postgres import PostgresSaver
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langgraph.prebuilt import ToolNode
+from IPython.display import Image, display
+
 
 # Load environment variables
 load_dotenv()
@@ -17,25 +28,16 @@ supabase = create_client(
 
 # State definition
 class State(TypedDict):
-    user_request: str
-    required_ingredients: List[str]
-    current_ingredient: str
-    available_options: List[Dict]
-    user_selections: List[Dict]
-    cart_items: List[Dict]
+    messages: Annotated[list, add_messages]
     user_id: str
-    session_id: str  
+    session_id: str
 
 # Tool definitions
 @tool
 def extract_recipe_ingredients(recipe_request: str) -> Dict[str, List[str]]:
     """Extract required ingredients from a recipe request"""
     # This could use an LLM or a predefined recipe database
-    recipes = {
-        "pasta": ["pasta", "tomato sauce", "parmesan cheese", "olive oil", "garlic", "basil"],
-        "pizza": ["pizza dough", "mozzarella cheese", "tomato sauce", "pepperoni", "mushrooms"],
-        "salad": ["lettuce", "tomatoes", "cucumber", "olive oil", "vinegar", "feta cheese"]
-    }
+    recipes = input("Whats are you looking for today?")
     
     recipe_request_lower = recipe_request.lower()
     for recipe, ingredients in recipes.items():
@@ -511,3 +513,116 @@ tools = [
     get_nutrition_comparison,
     clear_expired_sessions
 ]
+
+
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0,
+    max_tokens=None,
+    reasoning_format="parsed",
+    timeout=None,
+    max_retries=2,
+)
+
+
+# Bind tools to LLM
+llm_with_tools = llm.bind_tools(tools)
+
+# Define the system prompt
+SYSTEM_PROMPT = """You are a helpful shopping assistant that helps users order ingredients for recipes.
+
+When a user mentions a recipe:
+1. First use extract_recipe_ingredients to get the ingredient list
+2. Create a cart session using create_cart_session with the user_id from state
+3. For each ingredient:
+   - Use check_ingredient_availability to find options
+   - If multiple options exist, present them clearly to the user and wait for selection
+   - If only one option exists, add it directly to cart
+   - If no options exist, use search_alternatives
+4. Use add_to_cart with the session_id from state when adding items
+5. Show cart summary with get_user_cart
+6. Ask if they want to checkout
+
+Always be helpful and explain the options clearly, including prices and quantities."""
+
+def cartbot(state: State):
+    """Main chatbot that processes messages and decides on tool usage"""
+    messages = state["messages"]
+    #Add system messgage if not present
+    if not messages or not isinstance(messages[0], SystemMessage):
+        messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
+    # Add user id or sessionid on the latest message
+    if state.get("user_id") or state.get("session_id"):
+        context = f"Context user_id: {state.get('user_id')}, session_id: {state.get('session_id')}"
+        messages = messages + [SystemMessage(content=context)]
+
+    response = llm_with_tools.invoke(messages)
+    return {'messages': [response]}
+
+# routing function
+def should_continue(state: State) -> Literal["tools", "continue", "end"]:
+    """Determine if the conversation should continue based on the last message"""
+    message = state['messages']
+    last_message = message[-1] 
+
+    if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+        return "tools"
+    # If the conversation seems complete (checking for common end phrases)
+    if isinstance(last_message, AIMessage) and (
+        "thank you" in last_message.content.lower() or
+        "goodbye" in last_message.content.lower() or
+        "done" in last_message.content.lower() or
+        "checkout?" in last_message.content.lower() or
+        "complete your order" in last_message.content.lower() or
+        "anything else" in last_message.content.lower()
+    ):
+        return "continue"
+    return "continue"
+
+def create_graph_with_checkpointing():
+    "create a graph with checkpointing"
+    graph_builder  = StateGraph(State)
+
+    graph_builder.add_node("agent" , cartbot)
+    tool_node = ToolNode(tools=tools)
+    graph_builder.add_node("tools", tool_node)
+
+    # Set entry point
+    graph_builder.set_entry_point("agent")
+
+    # Add edges
+    graph_builder.add_conditional_edges(
+        "agent",
+        should_continue,
+        {
+            "tools": "tools",
+            "continue": "agent",
+            "end": END
+        }
+    )
+    graph_builder.add_edge("tools", "agent")
+    # Compile with checkpointing
+    saver = PostgresSaver.from_conn_string(os.getenv("SUPABASE_URL"))
+
+    graph = graph_builder.compile(checkpointer=saver)
+
+    try:
+        graph_image = graph.get_graph().draw_mermaid_png()
+        with open("graph.mermaid.png", "wb") as f:
+           f.write(graph_image)
+    except Exception as e:
+        print("Could not generate PNG:", e)
+        print(graph.get_graph().draw_mermaid())
+
+    return graph, saver
+
+
+
+
+
+
+
+
+
+
+

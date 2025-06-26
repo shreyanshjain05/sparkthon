@@ -1,4 +1,8 @@
-ShopifyAPI
 langchain
 langgraph
 supabase
+langchain-groq
+dotenv
+psycopg-binary
+langgraph-checkpoint-postgres
+ipython
