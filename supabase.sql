@@ -1,98 +1,146 @@
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Products table
+CREATE TABLE products (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    item_name TEXT NOT NULL,
+    sku TEXT UNIQUE NOT NULL,
+    brand TEXT,
+    quantity INTEGER NOT NULL DEFAULT 0,
+    unit TEXT,
+    category TEXT,
+    calories_per_100g INTEGER,
+    protein_g NUMERIC(5,2),
+    fat_g NUMERIC(5,2),
+    carbs_g NUMERIC(5,2),
+    sugar_g NUMERIC(5,2),
+    allergens TEXT,
+    price NUMERIC(10,2) NOT NULL,
+    stock_quantity INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-CREATE TABLE public.cart_sessions (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  user_id text NOT NULL,
-  session_id text NOT NULL UNIQUE,
-  session_type text DEFAULT 'general'::text CHECK (session_type = ANY (ARRAY['general'::text, 'recipe_based'::text, 'bulk_order'::text])),
-  active boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT now(),
-  expires_at timestamp with time zone,
-  metadata jsonb,
-  CONSTRAINT cart_sessions_pkey PRIMARY KEY (id)
+-- Cart sessions table
+CREATE TABLE cart_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id TEXT,
+    session_id TEXT NOT NULL,
+    session_type TEXT DEFAULT 'guest',
+    active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    metadata JSONB
 );
-CREATE TABLE public.order_items (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  order_id uuid NOT NULL,
-  sku text NOT NULL,
-  product_name text,
-  brand text,
-  quantity integer NOT NULL CHECK (quantity > 0),
-  unit_price numeric NOT NULL CHECK (unit_price >= 0::numeric),
-  total_price numeric NOT NULL,
-  CONSTRAINT order_items_pkey PRIMARY KEY (id),
-  CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id),
-  CONSTRAINT order_items_sku_fkey FOREIGN KEY (sku) REFERENCES public.products(sku)
+
+-- Shopping carts table
+CREATE TABLE shopping_carts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id TEXT,
+    sku TEXT NOT NULL REFERENCES products(sku),
+    product_name TEXT,
+    brand TEXT,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    unit_price NUMERIC(10,2) NOT NULL,
+    total_price NUMERIC(10,2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
+    notes TEXT,
+    added_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    status TEXT DEFAULT 'active',
+    session_id TEXT NOT NULL,
+    order_id UUID REFERENCES orders(id)
 );
-CREATE TABLE public.orders (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  user_id text NOT NULL,
-  order_number text NOT NULL UNIQUE,
-  total_amount numeric NOT NULL CHECK (total_amount >= 0::numeric),
-  order_status text DEFAULT 'pending'::text CHECK (order_status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'processing'::text, 'shipped'::text, 'delivered'::text, 'cancelled'::text])),
-  payment_method text,
-  shipping_address text,
-  delivery_date date,
-  special_instructions text,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  CONSTRAINT orders_pkey PRIMARY KEY (id)
+
+-- Orders table
+CREATE TABLE orders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id TEXT NOT NULL,
+    order_number TEXT UNIQUE NOT NULL,
+    total_amount NUMERIC(10,2) NOT NULL,
+    order_status TEXT DEFAULT 'pending',
+    payment_method TEXT,
+    shipping_address TEXT,
+    delivery_date DATE,
+    special_instructions TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE TABLE public.products (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  item_name text NOT NULL,
-  sku text NOT NULL UNIQUE,
-  brand text NOT NULL,
-  quantity integer NOT NULL,
-  unit text NOT NULL,
-  category text NOT NULL,
-  calories_per_100g integer,
-  protein_g numeric,
-  fat_g numeric,
-  carbs_g numeric,
-  sugar_g numeric,
-  allergens text,
-  price numeric NOT NULL,
-  stock_quantity integer DEFAULT 100,
-  is_active boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  CONSTRAINT products_pkey PRIMARY KEY (id)
+
+-- Order items table
+CREATE TABLE order_items (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    sku TEXT NOT NULL REFERENCES products(sku),
+    product_name TEXT,
+    brand TEXT,
+    quantity INTEGER NOT NULL,
+    unit_price NUMERIC(10,2) NOT NULL,
+    total_price NUMERIC(10,2) GENERATED ALWAYS AS (quantity * unit_price) STORED
 );
-CREATE TABLE public.shopping_carts (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  user_id text NOT NULL,
-  sku text NOT NULL,
-  product_name text,
-  brand text,
-  quantity integer NOT NULL CHECK (quantity > 0),
-  unit_price numeric NOT NULL CHECK (unit_price >= 0::numeric),
-  total_price numeric DEFAULT ((quantity)::numeric * unit_price),
-  notes text,
-  added_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  status text DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'purchased'::text, 'removed'::text, 'pending'::text])),
-  session_id text,
-  order_id uuid,
-  CONSTRAINT shopping_carts_pkey PRIMARY KEY (id),
-  CONSTRAINT shopping_carts_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.cart_sessions(session_id),
-  CONSTRAINT shopping_carts_sku_fkey FOREIGN KEY (sku) REFERENCES public.products(sku),
-  CONSTRAINT shopping_carts_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id)
-);
-CREATE TABLE public.langgraph_checkpoints (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),                         -- Unique checkpoint ID
-  user_id text NOT NULL,                                               -- Link to the user (from cart_sessions / orders)
-  session_id text NOT NULL,                                            -- Link to session (from cart_sessions)
-  state jsonb NOT NULL,                                                -- Stores LangGraph state (memory, messages, etc.)
-  created_at timestamp with time zone DEFAULT now(),                   -- When this checkpoint was created
-  updated_at timestamp with time zone DEFAULT now(),                   -- Last updated timestamp
-  step_index integer DEFAULT 0,                                        -- Optional: Step in multi-step flows
-  status text DEFAULT 'active'::text CHECK (status = ANY (             -- Flow status
-    ARRAY['active', 'completed', 'expired', 'error']
-  )),
-  CONSTRAINT langgraph_checkpoints_pkey PRIMARY KEY (id),
-  CONSTRAINT langgraph_checkpoints_user_id_fkey 
-    FOREIGN KEY (user_id) REFERENCES public.cart_sessions(user_id),
-  CONSTRAINT langgraph_checkpoints_session_id_fkey 
-    FOREIGN KEY (session_id) REFERENCES public.cart_sessions(session_id)
-);
+
+-- Create indexes for better performance
+CREATE INDEX idx_products_sku ON products(sku);
+CREATE INDEX idx_products_category ON products(category);
+CREATE INDEX idx_products_brand ON products(brand);
+CREATE INDEX idx_products_is_active ON products(is_active);
+
+CREATE INDEX idx_cart_sessions_user_id ON cart_sessions(user_id);
+CREATE INDEX idx_cart_sessions_session_id ON cart_sessions(session_id);
+CREATE INDEX idx_cart_sessions_active ON cart_sessions(active);
+
+CREATE INDEX idx_shopping_carts_user_id ON shopping_carts(user_id);
+CREATE INDEX idx_shopping_carts_session_id ON shopping_carts(session_id);
+CREATE INDEX idx_shopping_carts_sku ON shopping_carts(sku);
+CREATE INDEX idx_shopping_carts_status ON shopping_carts(status);
+
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+CREATE INDEX idx_orders_order_number ON orders(order_number);
+CREATE INDEX idx_orders_status ON orders(order_status);
+CREATE INDEX idx_orders_created_at ON orders(created_at);
+
+CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX idx_order_items_sku ON order_items(sku);
+
+-- Create updated_at trigger function
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Add triggers for updated_at columns
+CREATE TRIGGER update_products_updated_at 
+    BEFORE UPDATE ON products 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_shopping_carts_updated_at 
+    BEFORE UPDATE ON shopping_carts 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_orders_updated_at 
+    BEFORE UPDATE ON orders 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Add foreign key constraints after all tables are created
+ALTER TABLE shopping_carts 
+ADD CONSTRAINT fk_shopping_carts_session_id 
+FOREIGN KEY (session_id) REFERENCES cart_sessions(session_id);
+
+-- Sample data (optional - remove if not needed)
+-- Insert sample products
+INSERT INTO products (item_name, sku, brand, quantity, unit, category, price, stock_quantity) VALUES
+('Organic Bananas', 'BAN001', 'Fresh Farm', 6, 'pieces', 'Fruits', 3.99, 100),
+('Whole Milk', 'MILK001', 'Dairy Best', 1, 'liter', 'Dairy', 2.49, 50),
+('Brown Bread', 'BREAD001', 'Baker''s Choice', 1, 'loaf', 'Bakery', 1.99, 30);
+
+-- Insert sample cart session
+INSERT INTO cart_sessions (user_id, session_id, session_type) VALUES
+('user123', 'sess_abc123', 'registered');
+
+-- Insert sample shopping cart items
+INSERT INTO shopping_carts (user_id, sku, product_name, brand, quantity, unit_price, session_id) VALUES
+('user123', 'BAN001', 'Organic Bananas', 'Fresh Farm', 2, 3.99, 'sess_abc123'),
+('user123', 'MILK001', 'Whole Milk', 'Dairy Best', 1, 2.49, 'sess_abc123');
