@@ -1,4 +1,4 @@
-from typing import List, Dict, TypedDict, Optional, Literal
+from typing import List, Dict, TypedDict, Optional, Literal, Any
 from langchain.tools import tool
 from supabase import create_client
 import os
@@ -14,7 +14,8 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.postgres import PostgresSaver
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
-from IPython.display import Image, display
+import json
+
 
 
 # Load environment variables
@@ -26,29 +27,73 @@ supabase = create_client(
     os.getenv("SUPABASE_KEY")
 )
 
+recipes = {
+    "pasta": ["pasta", "tomato sauce", "garlic", "olive oil", "cheese", "basil"],
+    "pizza": ["pizza dough", "tomato sauce", "mozzarella cheese", "pepperoni", "olive oil"],
+    "salad": ["lettuce", "tomatoes", "cucumber", "olive oil", "vinegar", "salt"],
+    "sandwich": ["bread", "ham", "cheese", "lettuce", "mayonnaise"],
+    "soup": ["vegetables", "broth", "onion", "garlic", "salt", "pepper"],
+    "rice": ["rice", "water", "salt", "butter"],
+    "chicken curry": ["chicken", "curry powder", "onion", "garlic", "coconut milk", "rice"]
+}
+
 # State definition
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     user_id: str
     session_id: str
 
-# Tool definitions
+# --- TOOL DEFINITIONS (WITH FIXES) ---
+# I have applied json.dumps() to all tool return values to ensure they are strings.
+
 @tool
-def extract_recipe_ingredients(recipe_request: str) -> Dict[str, List[str]]:
-    """Extract required ingredients from a recipe request"""
-    # This could use an LLM or a predefined recipe database
-    recipes = input("Whats are you looking for today?")
-    
+def extract_recipe_ingredients(recipe_request: str) -> str:
+    """Extract required ingredients from a recipe request. Returns a JSON string."""
     recipe_request_lower = recipe_request.lower()
     for recipe, ingredients in recipes.items():
         if recipe in recipe_request_lower:
-            return {"recipe": recipe, "ingredients": ingredients}
+            result = {"recipe": recipe, "ingredients": ingredients}
+            return json.dumps(result)
     
-    return {"recipe": "unknown", "ingredients": []}
+    return json.dumps({"recipe": "unknown", "ingredients": []})
+
 
 @tool
-def create_cart_session(user_id: str, session_type: str = "recipe_based") -> Dict:
-    """Create a new cart session for the user"""
+def check_ingredient_availability(ingredient_name: str, category: Optional[str] = None) -> str:
+    """Check if an ingredient exists in the products table and fetch available options. Returns a JSON string."""
+    try:
+        query = supabase.table('products').select('*').eq('is_active', True)
+        query = query.ilike('item_name', f'%{ingredient_name}%')
+        if category:
+            query = query.eq('category', category)
+        
+        response = query.execute()
+        
+        if response.data:
+            result =  {
+                "available": True,
+                "options": response.data,
+                "count": len(response.data)
+            }
+            return json.dumps(result) 
+        else:
+            result =  {
+                "available": False,
+                "options": [],
+                "count": 0
+            }
+            return json.dumps(result) 
+    except Exception as e:
+        result = {
+            "available": False,
+            "error": str(e),
+            "options": []
+        }
+        return json.dumps(result)
+
+@tool
+def create_cart_session(user_id: str, session_type: str = "recipe_based") -> str:
+    """Create a new cart session for the user. Returns a JSON string."""
     try:
         session_data = {
             "user_id": user_id,
@@ -58,62 +103,21 @@ def create_cart_session(user_id: str, session_type: str = "recipe_based") -> Dic
             "expires_at": (datetime.now() + timedelta(hours=24)).isoformat(),
             "metadata": {"created_from": "recipe_assistant"}
         }
-        
         response = supabase.table('cart_sessions').insert(session_data).execute()
-        
-        return {
+        result = {
             "success": True,
             "session_id": response.data[0]["session_id"],
             "data": response.data[0]
         }
+        return json.dumps(result)
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return json.dumps({"success": False, "error": str(e)})
 
 @tool
-def check_ingredient_availability(ingredient_name: str, category: Optional[str] = None) -> Dict:
-    """Check if an ingredient exists in the products table and fetch available options"""
-    try:
-        # Build query
-        query = supabase.table('products').select('*').eq('is_active', True)
-        
-        # Search by item name
-        query = query.ilike('item_name', f'%{ingredient_name}%')
-        
-        # Filter by category if provided
-        if category:
-            query = query.eq('category', category)
-        
-        response = query.execute()
-        
-        if response.data:
-            return {
-                "available": True,
-                "options": response.data,
-                "count": len(response.data)
-            }
-        else:
-            return {
-                "available": False,
-                "options": [],
-                "count": 0
-            }
-    except Exception as e:
-        return {
-            "available": False,
-            "error": str(e),
-            "options": []
-        }
-
-@tool
-def get_product_details_for_comparison(skus: List[str]) -> List[Dict]:
-    """Fetch detailed product information including nutritional values for comparison"""
+def get_product_details_for_comparison(skus: List[str]) -> str:
+    """Fetch detailed product information for comparison. Returns a JSON string."""
     try:
         response = supabase.table('products').select('*').in_('sku', skus).eq('is_active', True).execute()
-        
-        # Format product details for comparison
         products = []
         for item in response.data:
             products.append({
@@ -137,101 +141,56 @@ def get_product_details_for_comparison(skus: List[str]) -> List[Dict]:
                 "stock_quantity": item.get("stock_quantity", 0),
                 "in_stock": item.get("stock_quantity", 0) > 0
             })
-        
-        # Sort by price for easy comparison
         products.sort(key=lambda x: x["price"])
-        
-        return products
+        return json.dumps(products)
     except Exception as e:
         print(f"Error fetching product details: {e}")
-        return []
+        return json.dumps([])
 
 @tool
-def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", session_id: str = None) -> Dict:
-    """Add a selected product to the shopping cart with session tracking"""
+def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", session_id: str = None) -> str:
+    """Add a selected product to the shopping cart with session tracking. Returns a JSON string."""
     try:
-        # First, get product details
         product_response = supabase.table('products').select('*').eq('sku', sku).single().execute()
         product = product_response.data
-        
         if not product:
-            return {
-                "success": False,
-                "error": "Product not found"
-            }
+            return json.dumps({"success": False, "error": "Product not found"})
         
-        # Check stock availability
         if product.get('stock_quantity', 0) < quantity:
-            return {
-                "success": False,
-                "error": f"Insufficient stock. Only {product.get('stock_quantity')} available"
-            }
+            return json.dumps({"success": False, "error": f"Insufficient stock. Only {product.get('stock_quantity')} available"})
         
-        # Check if item already exists in active cart
-        existing = supabase.table('shopping_carts').select('*').match({
-            'user_id': user_id,
-            'sku': sku,
-            'status': 'active'
-        }).execute()
-        
+        existing = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'sku': sku, 'status': 'active'}).execute()
         unit_price = float(product.get('price', 0))
         
         if existing.data:
-            # Update quantity if item exists
             new_quantity = existing.data[0]['quantity'] + quantity
-            total_price = new_quantity * unit_price
-            
             response = supabase.table('shopping_carts').update({
                 'quantity': new_quantity,
-                'total_price': total_price,
                 'updated_at': datetime.now().isoformat()
             }).eq('id', existing.data[0]['id']).execute()
-            
             action = "updated"
         else:
-            # Insert new item WITH SESSION_ID
             cart_item = {
-                'user_id': user_id,
-                'sku': sku,
-                'product_name': product.get('item_name'),
-                'brand': product.get('brand'),
-                'quantity': quantity,
-                'unit_price': unit_price,
-                'notes': notes,
-                'status': 'active',
-                'session_id': session_id  
+                'user_id': user_id, 'sku': sku, 'product_name': product.get('item_name'), 'brand': product.get('brand'),
+                'quantity': quantity, 'unit_price': unit_price, 'notes': notes, 'status': 'active', 'session_id': session_id
             }
-            
             response = supabase.table('shopping_carts').insert(cart_item).execute()
             action = "added"
         
-        return {
-            "success": True,
-            "message": f"Item {action} to cart",
-            "data": response.data[0]
-        }
+        result = {"success": True, "message": f"Item {action} to cart", "data": response.data[0]}
+        return json.dumps(result)
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
+        return json.dumps({"success": False, "error": str(e)})
 
 @tool
-def get_user_cart(user_id: str, status: str = "active") -> Dict:
-    """Retrieve the current cart contents for a user"""
+def get_user_cart(user_id: str, status: str = "active") -> str:
+    """Retrieve the current cart contents for a user. Returns a JSON string."""
     try:
-        # Get cart items with product details
-        response = supabase.table('shopping_carts').select('*').match({
-            'user_id': user_id,
-            'status': status
-        }).execute()
-        
+        response = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'status': status}).execute()
         cart_items = response.data
-        total_price = sum(float(item.get('total_price', 0)) for item in cart_items)
+        total_price = sum(float(item.get('unit_price', 0)) * item.get('quantity', 0) for item in cart_items)
         total_items = sum(item.get('quantity', 0) for item in cart_items)
         
-        # Group by brand for summary
         brands = {}
         for item in cart_items:
             brand = item.get('brand', 'Unknown')
@@ -239,264 +198,129 @@ def get_user_cart(user_id: str, status: str = "active") -> Dict:
                 brands[brand] = 0
             brands[brand] += 1
         
-        return {
-            "user_id": user_id,
-            "items": cart_items,
-            "item_count": len(cart_items),
-            "total_items": total_items,
-            "total_price": round(total_price, 2),
-            "brands_summary": brands,
-            "status": status
+        result = {
+            "user_id": user_id, "items": cart_items, "item_count": len(cart_items), "total_items": total_items,
+            "total_price": round(total_price, 2), "brands_summary": brands, "status": status
         }
+        return json.dumps(result)
     except Exception as e:
-        return {
-            "error": str(e),
-            "items": [],
-            "total_price": 0
-        }
+        return json.dumps({"error": str(e), "items": [], "total_price": 0})
 
 @tool
-def remove_from_cart(user_id: str, sku: str) -> Dict:
-    """Remove an item from the user's cart by marking it as removed"""
+def remove_from_cart(user_id: str, sku: str) -> str:
+    """Remove an item from the user's cart by marking it as removed. Returns a JSON string."""
     try:
-        # Update status to 'removed' instead of deleting
-        response = supabase.table('shopping_carts').update({
-            'status': 'removed',
-            'updated_at': datetime.now().isoformat()
-        }).match({
-            'user_id': user_id,
-            'sku': sku,
-            'status': 'active'
-        }).execute()
-        
+        response = supabase.table('shopping_carts').update({'status': 'removed', 'updated_at': datetime.now().isoformat()}).match({'user_id': user_id, 'sku': sku, 'status': 'active'}).execute()
         if response.data:
-            return {
-                "success": True,
-                "message": "Item removed from cart"
-            }
+            return json.dumps({"success": True, "message": "Item removed from cart"})
         else:
-            return {
-                "success": False,
-                "message": "Item not found in cart"
-            }
+            return json.dumps({"success": False, "message": "Item not found in cart"})
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return json.dumps({"success": False, "error": str(e)})
 
 @tool
-def update_cart_quantity(user_id: str, sku: str, new_quantity: int) -> Dict:
-    """Update the quantity of an item in the cart"""
+def update_cart_quantity(user_id: str, sku: str, new_quantity: int) -> str:
+    """Update the quantity of an item in the cart. Returns a JSON string."""
     try:
         if new_quantity <= 0:
             return remove_from_cart(user_id, sku)
         
-        # Get current cart item and product info
-        cart_item = supabase.table('shopping_carts').select('*').match({
-            'user_id': user_id,
-            'sku': sku,
-            'status': 'active'
-        }).single().execute()
-        
+        cart_item = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'sku': sku, 'status': 'active'}).single().execute()
         if not cart_item.data:
-            return {
-                "success": False,
-                "error": "Item not found in cart"
-            }
+            return json.dumps({"success": False, "error": "Item not found in cart"})
         
-        # Check stock availability
         product = supabase.table('products').select('stock_quantity').eq('sku', sku).single().execute()
         if product.data.get('stock_quantity', 0) < new_quantity:
-            return {
-                "success": False,
-                "error": f"Insufficient stock. Only {product.data.get('stock_quantity')} available"
-            }
+            return json.dumps({"success": False, "error": f"Insufficient stock. Only {product.data.get('stock_quantity')} available"})
         
-        # Update quantity and total price
-        unit_price = float(cart_item.data.get('unit_price', 0))
-        new_total = new_quantity * unit_price
-        
-        response = supabase.table('shopping_carts').update({
-            'quantity': new_quantity,
-            'updated_at': datetime.now().isoformat()
-        }).eq('id', cart_item.data['id']).execute()
-        
-        return {
-            "success": True,
-            "message": "Quantity updated",
-            "data": response.data[0]
-        }
+        response = supabase.table('shopping_carts').update({'quantity': new_quantity, 'updated_at': datetime.now().isoformat()}).eq('id', cart_item.data['id']).execute()
+        return json.dumps({"success": True, "message": "Quantity updated", "data": response.data[0]})
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return json.dumps({"success": False, "error": str(e)})
 
 @tool
-def search_alternatives(ingredient_name: str, exclude_skus: List[str] = [], category: str = None) -> List[Dict]:
-    """Search for alternative products when the requested item is not available"""
+def search_alternatives(ingredient_name: str, exclude_skus: List[str] = [], category: str = None) -> str:
+    """Search for alternative products. Returns a JSON string."""
     try:
         query = supabase.table('products').select('*').eq('is_active', True)
-        
-        # Search in item_name or category
         if category:
             query = query.or_(f'item_name.ilike.%{ingredient_name}%,category.eq.{category}')
         else:
             query = query.ilike('item_name', f'%{ingredient_name}%')
-        
-        # Exclude specific SKUs if provided
         if exclude_skus:
             query = query.not_.in_('sku', exclude_skus)
-        
-        # Only get items in stock
         query = query.gt('stock_quantity', 0)
-        
         response = query.limit(5).execute()
         
         alternatives = []
         for product in response.data:
             alternatives.append({
-                "sku": product.get("sku"),
-                "item_name": product.get("item_name"),
-                "brand": product.get("brand"),
-                "price": float(product.get("price", 0)),
-                "quantity": f"{product.get('quantity')} {product.get('unit')}",
-                "category": product.get("category"),
-                "in_stock": product.get("stock_quantity", 0) > 0
+                "sku": product.get("sku"), "item_name": product.get("item_name"), "brand": product.get("brand"),
+                "price": float(product.get("price", 0)), "quantity": f"{product.get('quantity')} {product.get('unit')}",
+                "category": product.get("category"), "in_stock": product.get("stock_quantity", 0) > 0
             })
-        
-        return alternatives
+        return json.dumps(alternatives)
     except Exception as e:
         print(f"Error finding alternatives: {e}")
-        return []
+        return json.dumps([])
 
 @tool
-def checkout_cart(user_id: str, shipping_address: str, delivery_date: str = None, special_instructions: str = "") -> Dict:
-    """Convert active cart items to an order"""
+def checkout_cart(user_id: str, shipping_address: str, delivery_date: str = None, special_instructions: str = "") -> str:
+    """Convert active cart items to an order. Returns a JSON string."""
     try:
-        # Get active cart items
-        cart_response = supabase.table('shopping_carts').select('*').match({
-            'user_id': user_id,
-            'status': 'active'
-        }).execute()
-        
+        cart_response = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'status': 'active'}).execute()
         if not cart_response.data:
-            return {
-                "success": False,
-                "error": "Cart is empty"
-            }
+            return json.dumps({"success": False, "error": "Cart is empty"})
         
-        # Calculate total amount
-        total_amount = sum(float(item.get('total_price', 0)) for item in cart_response.data)
-        
-        # Create order
+        total_amount = sum(float(item.get('unit_price', 0)) * item.get('quantity', 0) for item in cart_response.data)
         order_number = f"ORD-{user_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        order_data = {
-            'user_id': user_id,
-            'order_number': order_number,
-            'total_amount': total_amount,
-            'order_status': 'pending',
-            'shipping_address': shipping_address,
-            'delivery_date': delivery_date,
-            'special_instructions': special_instructions
-        }
-        
+        order_data = {'user_id': user_id, 'order_number': order_number, 'total_amount': total_amount, 'order_status': 'pending', 'shipping_address': shipping_address, 'delivery_date': delivery_date, 'special_instructions': special_instructions}
         order_response = supabase.table('orders').insert(order_data).execute()
         order_id = order_response.data[0]['id']
         
-        # Create order items from cart
-        order_items = []
-        for cart_item in cart_response.data:
-            order_items.append({
-                'order_id': order_id,
-                'sku': cart_item.get('sku'),
-                'product_name': cart_item.get('product_name'),
-                'brand': cart_item.get('brand'),
-                'quantity': cart_item.get('quantity'),
-                'unit_price': cart_item.get('unit_price'),
-                'total_price': cart_item.get('total_price')
-            })
-        
-        # Insert order items
+        order_items = [{'order_id': order_id, 'sku': item.get('sku'), 'product_name': item.get('product_name'), 'brand': item.get('brand'), 'quantity': item.get('quantity'), 'unit_price': item.get('unit_price'), 'total_price': float(item.get('unit_price', 0)) * item.get('quantity', 0)} for item in cart_response.data]
         supabase.table('order_items').insert(order_items).execute()
         
-        # Update cart items with order_id and status to 'purchased'
         cart_ids = [item['id'] for item in cart_response.data]
-        supabase.table('shopping_carts').update({
-            'status': 'purchased',
-            'order_id': order_id,  # Add order_id reference
-            'updated_at': datetime.now().isoformat()
-        }).in_('id', cart_ids).execute()
+        supabase.table('shopping_carts').update({'status': 'purchased', 'order_id': order_id, 'updated_at': datetime.now().isoformat()}).in_('id', cart_ids).execute()
         
-        # Update product stock quantities
-        for cart_item in cart_response.data:
-            product_response = supabase.table('products').select('stock_quantity').eq('sku', cart_item['sku']).single().execute()
-            new_stock = product_response.data['stock_quantity'] - cart_item['quantity']
-            
-            supabase.table('products').update({
-                'stock_quantity': max(0, new_stock),
-                'updated_at': datetime.now().isoformat()
-            }).eq('sku', cart_item['sku']).execute()
+        for item in cart_response.data:
+            product_response = supabase.table('products').select('stock_quantity').eq('sku', item['sku']).single().execute()
+            new_stock = product_response.data['stock_quantity'] - item['quantity']
+            supabase.table('products').update({'stock_quantity': max(0, new_stock), 'updated_at': datetime.now().isoformat()}).eq('sku', item['sku']).execute()
         
-        return {
-            "success": True,
-            "order_id": order_id,
-            "order_number": order_number,
-            "total_amount": total_amount,
-            "item_count": len(order_items)
-        }
+        result = {"success": True, "order_id": order_id, "order_number": order_number, "total_amount": total_amount, "item_count": len(order_items)}
+        return json.dumps(result)
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return json.dumps({"success": False, "error": str(e)})
+
 @tool
-def get_nutrition_comparison(skus: List[str]) -> List[Dict]:
-    """Compare nutritional information for multiple products"""
+def get_nutrition_comparison(skus: List[str]) -> str:
+    """Compare nutritional information for multiple products. Returns a JSON string."""
     try:
-        response = supabase.table('products').select(
-            'sku, item_name, brand, calories_per_100g, protein_g, fat_g, carbs_g, sugar_g, allergens'
-        ).in_('sku', skus).execute()
-        
+        response = supabase.table('products').select('sku, item_name, brand, calories_per_100g, protein_g, fat_g, carbs_g, sugar_g, allergens').in_('sku', skus).execute()
         comparisons = []
         for product in response.data:
             comparisons.append({
-                "sku": product.get("sku"),
-                "name": f"{product.get('brand')} {product.get('item_name')}",
-                "nutrition_per_100g": {
-                    "calories": product.get("calories_per_100g", 0),
-                    "protein": f"{product.get('protein_g', 0)}g",
-                    "fat": f"{product.get('fat_g', 0)}g",
-                    "carbs": f"{product.get('carbs_g', 0)}g",
-                    "sugar": f"{product.get('sugar_g', 0)}g"
-                },
+                "sku": product.get("sku"), "name": f"{product.get('brand')} {product.get('item_name')}",
+                "nutrition_per_100g": {"calories": product.get("calories_per_100g", 0), "protein": f"{product.get('protein_g', 0)}g", "fat": f"{product.get('fat_g', 0)}g", "carbs": f"{product.get('carbs_g', 0)}g", "sugar": f"{product.get('sugar_g', 0)}g"},
                 "allergens": product.get("allergens", "None").split(",") if product.get("allergens") else ["None"]
             })
-        
-        return comparisons
+        return json.dumps(comparisons)
     except Exception as e:
         print(f"Error comparing nutrition: {e}")
-        return []
+        return json.dumps([])
 
 @tool
-def clear_expired_sessions() -> Dict:
-    """Clean up expired cart sessions"""
+def clear_expired_sessions() -> str:
+    """Clean up expired cart sessions. Returns a JSON string."""
     try:
-        # Update expired sessions to inactive
-        response = supabase.table('cart_sessions').update({
-            'active': False
-        }).lt('expires_at', datetime.now().isoformat()).eq('active', True).execute()
-        
-        return {
-            "success": True,
-            "sessions_expired": len(response.data)
-        }
+        response = supabase.table('cart_sessions').update({'active': False}).lt('expires_at', datetime.now().isoformat()).eq('active', True).execute()
+        return json.dumps({"success": True, "sessions_expired": len(response.data)})
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return json.dumps({"success": False, "error": str(e)})
+# --- END OF TOOL DEFINITIONS ---
+
 
 # Create the tool list for LangGraph
 tools = [
@@ -516,11 +340,10 @@ tools = [
 
 
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="llama-3.3-70b-versatile", 
     temperature=0,
     max_tokens=None,
-    reasoning_format="parsed",
-    timeout=None,
+    timeout=30,
     max_retries=2,
 )
 
@@ -528,101 +351,184 @@ llm = ChatGroq(
 # Bind tools to LLM
 llm_with_tools = llm.bind_tools(tools)
 
-# Define the system prompt
-SYSTEM_PROMPT = """You are a helpful shopping assistant that helps users order ingredients for recipes.
+SYSTEM_PROMPT = """You are a helpful and highly conversational shopping assistant. Your primary goal is to guide a user through adding ingredients for a recipe to their cart, one step at a time. You MUST be conversational.
 
-When a user mentions a recipe:
-1. First use extract_recipe_ingredients to get the ingredient list
-2. Create a cart session using create_cart_session with the user_id from state
-3. For each ingredient:
-   - Use check_ingredient_availability to find options
-   - If multiple options exist, present them clearly to the user and wait for selection
-   - If only one option exists, add it directly to cart
-   - If no options exist, use search_alternatives
-4. Use add_to_cart with the session_id from state when adding items
-5. Show cart summary with get_user_cart
-6. Ask if they want to checkout
+**Core Conversation Flow:**
 
-Always be helpful and explain the options clearly, including prices and quantities."""
+**Rule 1: Initial Recipe Request**
+- When the user mentions a recipe, your first job is to use two tools in parallel: `extract_recipe_ingredients` and `create_cart_session`.
+- **CRITICAL:** After these tools run and you get the ingredient list and session_id, you MUST stop and talk to the user. DO NOT call any other tools yet.
+- Your response should confirm the recipe and list the ingredients. Example: "Great, let's shop for pasta! The ingredients are: pasta, tomato sauce, garlic, olive oil, cheese, and basil. I'll start by finding options for 'pasta'. Is that okay?"
+
+**Rule 2: Finding Ingredient Options**
+- When the user confirms, proceed with the first ingredient. Use the `check_ingredient_availability` tool for that ONE ingredient.
+- **CRITICAL:** After the tool returns the available products, you MUST stop and present these options to the user. DO NOT move on to the next ingredient.
+- Your response should be a clear, numbered list of choices. Ask the user to pick one. Example: "I found a few options for pasta: 1. Brand A Spaghetti ($2.99), 2. Brand B Penne ($3.49). Which one would you like?"
+
+**Rule 3: Adding to Cart**
+- When the user makes a choice, use the `add_to_cart` tool with the correct SKU and session_id.
+- **CRITICAL:** After adding the item, you MUST confirm it to the user and then propose the next step.
+- Example: "Okay, I've added Brand A Spaghetti to your cart. Shall we look for 'tomato sauce' next?"
+
+**Rule 4: Handling the Conversation**
+- Continue this process for each ingredient.
+- If an ingredient is not available, use the `search_alternatives` tool and present those.
+- Once all ingredients are handled, use `get_user_cart` to give a final summary.
+"""
 
 def cartbot(state: State):
-    """Main chatbot that processes messages and decides on tool usage"""
+    """Main chatbot that handles the conversation"""
     messages = state["messages"]
-    #Add system messgage if not present
+
+    # Add system message if not already present
     if not messages or not isinstance(messages[0], SystemMessage):
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
-    # Add user id or sessionid on the latest message
-    if state.get("user_id") or state.get("session_id"):
-        context = f"Context user_id: {state.get('user_id')}, session_id: {state.get('session_id')}"
-        messages = messages + [SystemMessage(content=context)]
 
+    # Add user_id and session_id to the context
+    context_info = []
+    if state.get("user_id"):
+        context_info.append(f"user_id={state['user_id']}")
+    if state.get("session_id"):
+        context_info.append(f"session_id={state['session_id']}")
+
+    if context_info:
+        context = f"\n\nCurrent context: {', '.join(context_info)}"
+        messages.append(SystemMessage(content=context))
+
+    # Invoke the LLM with tools
     response = llm_with_tools.invoke(messages)
-    return {'messages': [response]}
+
+    return {"messages": [response]}
 
 # routing function
-def should_continue(state: State) -> Literal["tools", "continue", "end"]:
+def should_continue(state: State) -> Literal["tools", "end"]:
     """Determine if the conversation should continue based on the last message"""
-    message = state['messages']
-    last_message = message[-1] 
+    messages = state['messages']
+    last_message = messages[-1] if messages else None
 
+    # If the last message has tool calls, go to tools
     if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
         return "tools"
-    # If the conversation seems complete (checking for common end phrases)
-    if isinstance(last_message, AIMessage) and (
-        "thank you" in last_message.content.lower() or
-        "goodbye" in last_message.content.lower() or
-        "done" in last_message.content.lower() or
-        "checkout?" in last_message.content.lower() or
-        "complete your order" in last_message.content.lower() or
-        "anything else" in last_message.content.lower()
-    ):
-        return "continue"
-    return "continue"
+    
+    # Otherwise, end the conversation cycle (but continue chatting)
+    return "end"
 
-def create_graph_with_checkpointing():
-    "create a graph with checkpointing"
-    graph_builder  = StateGraph(State)
+# Helper function to build the graph
+def build_graph():
+    """Build the LangGraph structure with tools and conditional routing"""
+    graph_builder = StateGraph(State)
 
-    graph_builder.add_node("agent" , cartbot)
+    # Add nodes
+    graph_builder.add_node("agent", cartbot)
     tool_node = ToolNode(tools=tools)
     graph_builder.add_node("tools", tool_node)
 
     # Set entry point
     graph_builder.set_entry_point("agent")
 
-    # Add edges
+    # FIXED: Simplified routing - no self-loops
     graph_builder.add_conditional_edges(
         "agent",
         should_continue,
         {
             "tools": "tools",
-            "continue": "agent",
             "end": END
         }
     )
+
+    # Tools always return to the agent
     graph_builder.add_edge("tools", "agent")
-    # Compile with checkpointing
-    saver = PostgresSaver.from_conn_string(os.getenv("SUPABASE_URL"))
 
-    graph = graph_builder.compile(checkpointer=saver)
-
-    try:
-        graph_image = graph.get_graph().draw_mermaid_png()
-        with open("graph.mermaid.png", "wb") as f:
-           f.write(graph_image)
-    except Exception as e:
-        print("Could not generate PNG:", e)
-        print(graph.get_graph().draw_mermaid())
-
-    return graph, saver
+    return graph_builder
 
 
 
+def extract_session_from_tool_response(messages: List[Any], state: Dict[str, Any]) -> str:
+    """Extract session_id from tool responses if present in messages"""
+    for msg in reversed(messages):  # Check most recent first
+        if hasattr(msg, "content") and isinstance(msg.content, str):
+            try:
+                if "session_id" in msg.content:
+                    content = json.loads(msg.content)
+                    if isinstance(content, dict) and content.get("session_id"):
+                        return content["session_id"]
+            except json.JSONDecodeError:
+                continue
+    return state.get("session_id", "")
 
+    
+def chat_with_recipe_bot(user_id: str, thread_id: str = None):
+    """Run an interactive chat session by manually managing message history."""
+    print("What's on the menu today?")
+    print("Type 'quit' to exit\n")
 
+    if thread_id is None:
+        thread_id = str(uuid.uuid4())
+    print(f"Session ID: {thread_id}")
 
+    # Compile the graph
+    graph = build_graph().compile()
+    
+    # This config is still useful for things like recursion limits
+    config = {"recursion_limit": 50} 
 
+    # We will manually keep track of the conversation history in this list
+    messages = []
 
+    while True:
+        try:
+            user_input = input("\nYou: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n\nGoodbye!")
+            break
 
+        if user_input.lower() in ["quit", "exit", "bye"]:
+            print("\nThank you for shopping with us! 👋")
+            break
 
+        if not user_input:
+            continue
+            
+        # 1. Add the new user message to our history
+        messages.append(HumanMessage(content=user_input))
+
+        # 2. Prepare the input for the graph with the FULL message history
+        # This gives the agent the memory of the conversation.
+        input_data = {"messages": messages}
+
+        try:
+            print("Processing...")
+            # 3. Call the graph ONCE with the full history
+            result = graph.invoke(input_data, config=config)
+
+            # 4. The result contains the new history. Update our local list.
+            messages = result['messages']
+            
+            # 5. Find the latest AIMessage to display to the user
+            latest_ai_message = messages[-1]
+            if isinstance(latest_ai_message, AIMessage) and latest_ai_message.content:
+                print(f"\nAssistant: {latest_ai_message.content}")
+            
+        except Exception as e:
+            print(f"\nAn error occurred: {e}")
+            print("Let's try that again.")
+            # If an error happens, remove the last user message we added
+            # so the history is clean for the next attempt.
+            messages.pop()
+    
+    return thread_id
+# # Main execution
+if __name__ == "__main__":
+    user_id = "user123"
+    
+    # Start chat
+    thread_id = chat_with_recipe_bot(user_id)
+
+# To build graph
+
+# graph = build_graph()
+# graph  = graph.compile()
+# graph_image = graph.get_graph().draw_mermaid_png()
+# with open('graph.png' , 'wb') as f:
+#     f.write(graph_image)
 
