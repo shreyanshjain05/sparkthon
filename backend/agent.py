@@ -16,6 +16,8 @@ from langchain.schema.runnable import Runnable
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 import json
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect,HTTPException
+import uvicorn
 
 # Load environment variables
 load_dotenv(dotenv_path="../env")
@@ -529,18 +531,105 @@ def chat_with_recipe_bot(user_id: str, thread_id: str = None):
             messages.pop()
     
     return thread_id
-# # Main execution
-if __name__ == "__main__":
-    user_id = "user123"
+# # # Main execution
+# if __name__ == "__main__":
+#     user_id = "user123"
     
-    # Start chat
-    thread_id = chat_with_recipe_bot(user_id)
+#     # Start chat
+#     thread_id = chat_with_recipe_bot(user_id)
 
 # To build graph
 
-# graph = build_graph()
-# graph  = graph.compile()
+graph = build_graph()
+graph  = graph.compile()
 # graph_image = graph.get_graph().draw_mermaid_png()
 # with open('graph.png' , 'wb') as f:
 #     f.write(graph_image)
 
+
+
+app = FastAPI(title="Simple Recipe Chatbot API")
+
+# We will use a simple list to store the history for our single, fixed user.
+conversation_history = []
+
+@app.get("/api/search")
+async def search_products(q: str = ""):
+    """Search for products in the database"""
+    if not q.strip():
+        return {"products": [], "count": 0}
+    
+    try:
+        # Search in your products table
+        response = supabase.table('products').select('*').eq('is_active', True).ilike('item_name', f'%{q}%').limit(10).execute()
+        
+        products = []
+        for item in response.data:
+            products.append({
+                "id": item.get("id"),
+                "sku": item.get("sku"),
+                "name": item.get("item_name"),
+                "brand": item.get("brand"),
+                "price": float(item.get("price", 0)),
+                "category": item.get("category"),
+                "in_stock": item.get("stock_quantity", 0) > 0,
+                "stock_quantity": item.get("stock_quantity", 0)
+            })
+        
+        return {"products": products, "count": len(products)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+async def root():
+    return {"message": "Recipe Chatbot API is running"}
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """A single endpoint for the chatbot."""
+    await websocket.accept()
+    global conversation_history
+    # Reset history for each new connection for a clean start
+    conversation_history = []
+
+    # await websocket.send_json({"response": "Welcome! What would you like to cook today?"})
+
+    try:
+        while True:
+            # 1. RECEIVE a message from the client
+            data = await websocket.receive_text()
+            user_input = json.loads(data).get("message")
+
+            if not user_input:
+                continue
+
+            # Add the new user message to our history
+            conversation_history.append(HumanMessage(content=user_input))
+
+            # Prepare the input for the graph
+            graph_input = {
+                "messages": conversation_history,
+                "user_id": 'user123' # Always use the fixed user ID
+            }
+
+            # Run the graph until it finishes this turn
+            final_state = graph.invoke(graph_input)
+
+            # Get the latest AI message from the final state
+            ai_response = final_state["messages"][-1].content
+            conversation_history = final_state["messages"]
+
+            # 2. SEND the final response back to the client
+            await websocket.send_json({"response": ai_response})
+
+    except WebSocketDisconnect:
+        print("Client disconnected. Chat history has been reset.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        await websocket.send_json({"response": "Sorry, an error occurred. Please try again."})
+
+
+# --- Main entry point to run the server ---
+# if __name__ == "__main__":
+#     print("Starting FastAPI server...")
+#     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

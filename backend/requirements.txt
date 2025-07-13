@@ -6,3 +6,5 @@ dotenv
 psycopg-binary
 langgraph-checkpoint-postgres
 ipython
+fastapi
+uvicorn 
