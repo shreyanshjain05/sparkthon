@@ -35,9 +35,6 @@ An intelligent shopping assistant that helps users shop for recipe ingredients t
 
 
 *The agent orchestrates multiple tools to handle recipe parsing, ingredient searching, cart management, and checkout processes.*
-
-Here's your updated **👥 Team Credits** section with proper GitHub links formatted in markdown:
-
 ---
 
 ## 👥 Team Credits
@@ -63,8 +60,6 @@ This project was built collaboratively by:
   * Conversation flow logic
 
 ---
-
-Let me know if you'd like to differentiate the profiles of Shreya, Rahul, and Chirag if they have separate GitHub handles.
 
 
 ## 🚀 Quick Start
