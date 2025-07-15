@@ -9,7 +9,9 @@ An intelligent shopping assistant that helps users shop for recipe ingredients t
 
 ## 🎥 Demo Video
 
-[![Demo Video](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+
+https://github.com/user-attachments/assets/d687eb69-0f4f-422e-88ad-3f24474def68
+
 
 *Click the image above to watch our demo video showcasing the AI Recipe Shopping Assistant in action!*
 
