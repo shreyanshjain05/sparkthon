@@ -43,13 +43,13 @@ https://github.com/user-attachments/assets/d687eb69-0f4f-422e-88ad-3f24474def68
 
 This project was built collaboratively by:
 
-* **Frontend (Walmart Clone)**: [Shreya & Rahul Jain](https://github.com/ShreyaRahulJain)
+* **Frontend (Walmart Clone)**: [Shreya Rahul Jain](https://github.com/ShreyaRahulJain)
 
   * Next.js implementation
   * UI/UX design
   * Component architecture
 
-* **Backend & Integration**: [Shreya & Rahul Jain](https://github.com/ShreyaRahulJain)
+* **Backend & Integration**: [Shreya Rahul Jain](https://github.com/ShreyaRahulJain)
 
   * FastAPI server setup
   * WebSocket implementation
