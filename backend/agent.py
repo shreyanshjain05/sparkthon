@@ -456,22 +456,6 @@ def build_graph():
 
     return graph_builder
 
-
-
-def extract_session_from_tool_response(messages: List[Any], state: Dict[str, Any]) -> str:
-    """Extract session_id from tool responses if present in messages"""
-    for msg in reversed(messages):  # Check most recent first
-        if hasattr(msg, "content") and isinstance(msg.content, str):
-            try:
-                if "session_id" in msg.content:
-                    content = json.loads(msg.content)
-                    if isinstance(content, dict) and content.get("session_id"):
-                        return content["session_id"]
-            except json.JSONDecodeError:
-                continue
-    return state.get("session_id", "")
-
-    
 def chat_with_recipe_bot(user_id: str, thread_id: str = None):
     """Run an interactive chat session by manually managing message history."""
     print("What's on the menu today?")
