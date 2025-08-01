@@ -2,6 +2,13 @@
 
 An intelligent shopping assistant that helps users shop for recipe ingredients through natural conversation. Built with LangGraph for orchestrated AI workflows, this project combines a Walmart-inspired frontend with a powerful agentic backend.
 
+
+### 📝 Medium Article
+
+Complete documentation of the code and implementation can be found here:  
+**_👉 [LangGraph + Supabase + Groq: Production-Grade Agentic Workflow](https://medium.com/gitconnected/langgraph-supabase-groq-api-production-grade-agentic-workflow-e3b706278b6a)_**
+
+
 ### Langgraph Flow
 
 
