@@ -1,337 +1,178 @@
-"use client"
-import type React from "react"
-import { useState, useRef, useEffect } from "react"
-import { Send, X, Bot, User, ShoppingCart, Wifi, WifiOff, Loader2 } from "lucide-react"
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useUser, useSessionContext } from "@supabase/auth-helpers-react";
+import { useRouter } from "next/navigation";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { X } from "lucide-react";
 
 interface Message {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  timestamp: Date
+  role: "user" | "assistant";
+  content: string;
 }
 
 interface ChatbotProps {
-  isOpen: boolean
-  onClose: () => void
+  isOpen: boolean;
+  onClose: () => void;
 }
 
 export default function Chatbot({ isOpen, onClose }: ChatbotProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "assistant",
-      content: "Welcome! What would you like to cook today? I'll help you find all the ingredients you need for your recipe.",
-      timestamp: new Date(),
-    },
-  ])
-  const [input, setInput] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [isConnected, setIsConnected] = useState(false)
-  const [reconnectAttempts, setReconnectAttempts] = useState(0)
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const scrollAreaRef = useRef<HTMLDivElement>(null)
-  const wsRef = useRef<WebSocket | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const user = useUser();
+  const { session, isLoading: sessionLoading } = useSessionContext();
+  const router = useRouter();
+  const [inputText, setInputText] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // WebSocket connection effect
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
   useEffect(() => {
-    if (isOpen && !wsRef.current) {
-      connectWebSocket()
-    }
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-    }
-  }, [isOpen])
+    scrollToBottom();
+  }, [messages]);
 
-  // Auto-scroll effect
   useEffect(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight
-    }
-  }, [messages])
-
-  // Focus input when connected
-  useEffect(() => {
-    if (isConnected && inputRef.current) {
-      inputRef.current.focus()
-    }
-  }, [isConnected])
-
-  const connectWebSocket = () => {
-    if (wsRef.current?.readyState === WebSocket.CONNECTING) {
-      return // Already connecting
-    }
-
-    try {
-      setIsReconnecting(true)
-      // Update this URL to match your backend server
-      const wsUrl = "ws://localhost:8000/ws"
-      wsRef.current = new WebSocket(wsUrl)
-
-      wsRef.current.onopen = () => {
-        console.log("WebSocket connected")
-        setIsConnected(true)
-        setReconnectAttempts(0)
-        setIsReconnecting(false)
-      }
+    if (user && isOpen) {
+      // Set up WebSocket connection
+      wsRef.current = new WebSocket("ws://localhost:8000/ws");
 
       wsRef.current.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          if (data.response) {
-            const assistantMessage: Message = {
-              id: Date.now().toString(),
-              role: "assistant",
-              content: data.response,
-              timestamp: new Date(),
-            }
-            setMessages((prev) => [...prev, assistantMessage])
-          }
-        } catch (error) {
-          console.error("Error parsing WebSocket message:", error)
+        const data = JSON.parse(event.data);
+        if (data.response) {
+          setMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
+          setIsLoading(false);
         }
-        setIsLoading(false)
-      }
-
-      wsRef.current.onclose = (event) => {
-        console.log("WebSocket disconnected", event.code, event.reason)
-        setIsConnected(false)
-        setIsReconnecting(false)
-        wsRef.current = null
-        
-        // Auto-reconnect logic
-        if (event.code !== 1000 && reconnectAttempts < 5) {
-          setTimeout(() => {
-            setReconnectAttempts(prev => prev + 1)
-            connectWebSocket()
-          }, Math.pow(2, reconnectAttempts) * 1000) // Exponential backoff
-        }
-      }
+      };
 
       wsRef.current.onerror = (error) => {
-        console.error("WebSocket error:", error)
-        setIsConnected(false)
-        setIsLoading(false)
-        setIsReconnecting(false)
-        
-        // Add error message to chat
-        const errorMessage: Message = {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Sorry, I'm having trouble connecting. Please make sure the server is running and try again.",
-          timestamp: new Date(),
+        console.error("WebSocket error:", error);
+        setIsLoading(false);
+      };
+
+      wsRef.current.onclose = () => {
+        console.log("WebSocket connection closed");
+        setIsLoading(false);
+      };
+
+      // Cleanup on unmount
+      return () => {
+        if (wsRef.current) {
+          wsRef.current.close();
         }
-        setMessages((prev) => [...prev, errorMessage])
-      }
-    } catch (error) {
-      console.error("Failed to connect WebSocket:", error)
-      setIsConnected(false)
-      setIsReconnecting(false)
+      };
     }
+  }, [user, isOpen]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim() || !user || !wsRef.current) return;
+
+    setIsLoading(true);
+    setMessages((prev) => [...prev, { role: "user", content: inputText }]);
+    
+    wsRef.current.send(JSON.stringify({ message: inputText }));
+    setInputText("");
+  };
+
+  if (!isOpen) return null;
+
+  // Show loading state while session is being checked
+  if (sessionLoading) {
+    return (
+      <div className="fixed bottom-4 right-4 z-50">
+        <Card className="w-96 shadow-lg">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Loading...</CardTitle>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <p>Checking authentication...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
-  const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
-    e?.preventDefault()
-    if (!input.trim() || isLoading || !isConnected || !wsRef.current) return
+  // Debug: Log the session and user state
+  console.log("Session:", session);
+  console.log("User:", user);
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: input,
-      timestamp: new Date(),
-    }
-
-    setMessages((prev) => [...prev, userMessage])
-    setInput("")
-    setIsLoading(true)
-
-    try {
-      // Send message via WebSocket
-      wsRef.current.send(JSON.stringify({
-        message: input
-      }))
-    } catch (error) {
-      console.error("Error sending message:", error)
-      setIsLoading(false)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "Sorry, I encountered an error sending your message. Please try again.",
-        timestamp: new Date(),
-      }
-      setMessages((prev) => [...prev, errorMessage])
-    }
+  if (!session && !user) {
+    return (
+      <div className="fixed bottom-4 right-4 z-50">
+        <Card className="w-96 shadow-lg">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Sign in to start shopping</CardTitle>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-4">Please sign in to access the shopping assistant.</p>
+            <Button onClick={() => router.push("/auth/login")}>Sign In</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
-
-  const handleReconnect = () => {
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-    setReconnectAttempts(0)
-    connectWebSocket()
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit(e)
-    }
-  }
-
-  if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md h-[600px] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-t-lg">
-          <div className="flex items-center gap-2">
-            <ShoppingCart className="w-5 h-5" />
-            <h3 className="font-semibold">Recipe Shopping Assistant</h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-white hover:bg-opacity-20 rounded-full transition-colors"
-            aria-label="Close chat"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Connection status indicator */}
-        <div className="px-4 py-2 bg-gray-50 border-b">
-          <div className="flex items-center gap-2 text-sm">
-            {isConnected ? (
-              <>
-                <Wifi className="w-4 h-4 text-green-500" />
-                <span className="text-green-600">Connected</span>
-              </>
-            ) : isReconnecting ? (
-              <>
-                <Loader2 className="w-4 h-4 text-yellow-500 animate-spin" />
-                <span className="text-yellow-600">Reconnecting...</span>
-              </>
-            ) : (
-              <>
-                <WifiOff className="w-4 h-4 text-red-500" />
-                <span className="text-red-600">Disconnected</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Chat messages */}
-        <div 
-          ref={scrollAreaRef}
-          className="flex-1 overflow-y-auto p-4 space-y-4"
-        >
-          {messages.map((message) => (
+    <div className="fixed bottom-4 right-4 z-50">
+      <Card className="w-96 h-[600px] flex flex-col shadow-lg">
+        <CardHeader className="flex flex-row items-center justify-between border-b">
+          <CardTitle>Shopping Assistant</CardTitle>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.length === 0 && (
+            <div className="text-center text-gray-500 mt-8">
+              <p>Hello! How can I help you shop today?</p>
+            </div>
+          )}
+          {messages.map((message, index) => (
             <div
-              key={message.id}
+              key={index}
               className={`flex ${
-                message.role === "user" ? "justify-end" : "justify-start"
+                message.role === "assistant" ? "justify-start" : "justify-end"
               }`}
             >
               <div
-                className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                  message.role === "user"
-                    ? "bg-blue-500 text-white"
-                    : "bg-gray-100 text-gray-800"
+                className={`max-w-[80%] rounded-lg p-3 ${
+                  message.role === "assistant"
+                    ? "bg-gray-200"
+                    : "bg-blue-500 text-white"
                 }`}
               >
-                <div className="flex items-start gap-2">
-                  {message.role === "assistant" && <Bot className="w-4 h-4 mt-1 flex-shrink-0" />}
-                  {message.role === "user" && <User className="w-4 h-4 mt-1 flex-shrink-0" />}
-                  <div className="flex-1">
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {message.content}
-                    </div>
-                    <div className={`text-xs mt-1 ${
-                      message.role === "user" ? "text-blue-100" : "text-gray-500"
-                    }`}>
-                      {message.timestamp.toLocaleTimeString([], { 
-                        hour: '2-digit', 
-                        minute: '2-digit' 
-                      })}
-                    </div>
-                  </div>
-                </div>
+                {message.content}
               </div>
             </div>
           ))}
-          
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="max-w-[80%] rounded-lg px-4 py-2 bg-gray-100 text-gray-800">
-                <div className="flex items-start gap-2">
-                  <Bot className="w-4 h-4 mt-1 flex-shrink-0" />
-                  <div className="flex items-center gap-1">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="text-sm">Thinking...</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          <div ref={messagesEndRef} />
         </div>
-
-        {/* Input area */}
-        <div className="p-4 border-t bg-gray-50">
-          {!isConnected && (
-            <div className="mb-3 flex justify-center">
-              <button
-                onClick={handleReconnect}
-                disabled={isReconnecting}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm flex items-center gap-2"
-              >
-                {isReconnecting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Reconnecting...
-                  </>
-                ) : (
-                  <>
-                    <Wifi className="w-4 h-4" />
-                    Reconnect to Server
-                  </>
-                )}
-              </button>
-            </div>
-          )}
-
+        <form onSubmit={handleSubmit} className="p-4 border-t">
           <div className="flex gap-2">
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={isConnected ? "Tell me what you'd like to cook..." : "Connecting..."}
-              disabled={isLoading || !isConnected}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-              onKeyPress={handleKeyPress}
+            <Input
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="What would you like to shop for?"
+              disabled={isLoading}
+              className="flex-1"
             />
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading || !isConnected || !input.trim()}
-              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-            >
-              {isLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
-              )}
-            </button>
+            <Button type="submit" disabled={isLoading || !inputText.trim()}>
+              {isLoading ? "Sending..." : "Send"}
+            </Button>
           </div>
-          
-          <div className="mt-2 text-xs text-gray-500 text-center">
-            Press Enter to send • Shift+Enter for new line
-          </div>
-        </div>
-      </div>
+        </form>
+      </Card>
     </div>
-  )
+  );
 }

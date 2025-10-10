@@ -7,6 +7,7 @@ import { Search, ShoppingCart, Menu, User, Heart } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { AuthButton } from "./auth-button"
 
 interface HeaderProps {
   onSearch: (query: string) => void
@@ -27,11 +28,9 @@ export default function Header({ onSearch, onToggleChat }: HeaderProps) {
         {/* Top bar */}
         <div className="flex items-center justify-between py-2 text-sm">
           <div className="flex items-center space-x-4">
-            <span>Free shipping on orders $35+</span>
           </div>
           <div className="flex items-center space-x-4">
-            <button className="hover:underline">Sign In</button>
-            <button className="hover:underline">Create Account</button>
+            <AuthButton />
           </div>
         </div>
 
@@ -39,23 +38,6 @@ export default function Header({ onSearch, onToggleChat }: HeaderProps) {
         <div className="flex items-center justify-between py-4">
           <div className="flex items-center space-x-8">
             <h1 className="text-2xl font-bold">Walmart</h1>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="text-white hover:bg-blue-700">
-                  <Menu className="h-5 w-5 mr-2" />
-                  Departments
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56">
-                <DropdownMenuItem>Electronics</DropdownMenuItem>
-                <DropdownMenuItem>Clothing</DropdownMenuItem>
-                <DropdownMenuItem>Home & Garden</DropdownMenuItem>
-                <DropdownMenuItem>Sports & Outdoors</DropdownMenuItem>
-                <DropdownMenuItem>Health & Beauty</DropdownMenuItem>
-                <DropdownMenuItem>Grocery</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
 
           {/* Search bar */}
@@ -83,17 +65,29 @@ export default function Header({ onSearch, onToggleChat }: HeaderProps) {
             <Button variant="ghost" className="text-white hover:bg-blue-700" onClick={onToggleChat}>
               💬 Chat
             </Button>
-            <Button variant="ghost" className="text-white hover:bg-blue-700">
+            {/* <Button variant="ghost" className="text-white hover:bg-blue-700">
               <Heart className="h-5 w-5" />
-            </Button>
-            <Button variant="ghost" className="text-white hover:bg-blue-700">
-              <User className="h-5 w-5" />
-            </Button>
+            </Button> */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                {/* <Button variant="ghost" className="text-white hover:bg-blue-700">
+                  <User className="h-5 w-5" />
+                </Button> */}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {/* <DropdownMenuItem>
+                  <a href="/protected/profile">Profile</a>
+                </DropdownMenuItem> */}
+                <DropdownMenuItem>
+                  <a href="/protected/orders">Orders</a>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button variant="ghost" className="text-white hover:bg-blue-700 relative">
-              <ShoppingCart className="h-5 w-5" />
+              {/* <ShoppingCart className="h-5 w-5" />
               <span className="absolute -top-1 -right-1 bg-yellow-400 text-black text-xs rounded-full h-5 w-5 flex items-center justify-center">
                 0
-              </span>
+              </span> */}
             </Button>
           </div>
         </div>

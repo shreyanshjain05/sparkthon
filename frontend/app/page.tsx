@@ -3,11 +3,13 @@
 import { useState, useEffect } from "react"
 import Header from "@/components/header"
 import ProductGrid from "@/components/product-grid"
-import CategoriesSection from "@/components/categories-section"
+// import CategoriesSection from "@/components/categories-section"
 import Chatbot from "@/components/chatbot"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import type { Product, Category } from "@/lib/database"
+import type { Category } from "@/lib/database"
+import type { Product } from "@/lib/supabase/db"
+import { AuthButton } from "@/components/auth-button"
 
 export default function HomePage() {
   const [products, setProducts] = useState<Product[]>([])
@@ -16,118 +18,42 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [isChatOpen, setIsChatOpen] = useState(false)
 
-  // Mock categories data
+  // Fetch categories from the API
+  const fetchCategories = async () => {
+    try {
+      const response = await fetch('/api/categories')
+      const data = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch categories')
+      }
+      
+      setCategories(data.categories)
+    } catch (error) {
+      console.error("Error fetching categories:", error)
+      setCategories([])
+    }
+  }
+
   useEffect(() => {
-    const mockCategories: Category[] = [
-      { id: 1, name: "Electronics", slug: "electronics", image_url: "/placeholder.svg?height=64&width=64" },
-      { id: 2, name: "Clothing", slug: "clothing", image_url: "/placeholder.svg?height=64&width=64" },
-      { id: 3, name: "Home & Garden", slug: "home-garden", image_url: "/placeholder.svg?height=64&width=64" },
-      { id: 4, name: "Sports & Outdoors", slug: "sports-outdoors", image_url: "/placeholder.svg?height=64&width=64" },
-      { id: 5, name: "Health & Beauty", slug: "health-beauty", image_url: "/placeholder.svg?height=64&width=64" },
-      { id: 6, name: "Grocery", slug: "grocery", image_url: "/placeholder.svg?height=64&width=64" },
-    ]
-    setCategories(mockCategories)
+    fetchCategories()
   }, [])
 
   const fetchProducts = async (query = "") => {
     setLoading(true)
     try {
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`)
-      if (response.ok) {
-        const data = await response.json()
-        setProducts(data.products)
-      } else {
-        // Fallback to mock data if database is not available
-        const mockProducts: Product[] = [
-          {
-            id: 1,
-            name: "iPhone 15 Pro",
-            description: "Latest Apple smartphone with advanced camera system",
-            price: 999.99,
-            image_url: "/placeholder.svg?height=300&width=300",
-            category: "Electronics",
-            brand: "Apple",
-            rating: 4.8,
-            reviews_count: 1250,
-            in_stock: true,
-          },
-          {
-            id: 2,
-            name: 'Samsung 65" 4K Smart TV',
-            description: "Ultra HD Smart TV with HDR and streaming apps",
-            price: 799.99,
-            image_url: "/placeholder.svg?height=300&width=300",
-            category: "Electronics",
-            brand: "Samsung",
-            rating: 4.6,
-            reviews_count: 890,
-            in_stock: true,
-          },
-          {
-            id: 3,
-            name: "Nike Air Max 270",
-            description: "Comfortable running shoes with air cushioning",
-            price: 129.99,
-            image_url: "/placeholder.svg?height=300&width=300",
-            category: "Clothing",
-            brand: "Nike",
-            rating: 4.5,
-            reviews_count: 2100,
-            in_stock: true,
-          },
-          {
-            id: 4,
-            name: "Instant Pot Duo 7-in-1",
-            description: "Multi-functional pressure cooker",
-            price: 89.99,
-            image_url: "/placeholder.svg?height=300&width=300",
-            category: "Home & Garden",
-            brand: "Instant Pot",
-            rating: 4.7,
-            reviews_count: 15600,
-            in_stock: true,
-          },
-          {
-            id: 5,
-            name: "PlayStation 5",
-            description: "Next-gen gaming console",
-            price: 499.99,
-            image_url: "/placeholder.svg?height=300&width=300",
-            category: "Electronics",
-            brand: "Sony",
-            rating: 4.9,
-            reviews_count: 8900,
-            in_stock: false,
-          },
-          {
-            id: 6,
-            name: "MacBook Air M2",
-            description: "Lightweight laptop with M2 chip",
-            price: 1199.99,
-            image_url: "/placeholder.svg?height=300&width=300",
-            category: "Electronics",
-            brand: "Apple",
-            rating: 4.7,
-            reviews_count: 950,
-            in_stock: true,
-          },
-        ]
-
-        if (query) {
-          const filtered = mockProducts.filter(
-            (product) =>
-              product.name.toLowerCase().includes(query.toLowerCase()) ||
-              product.description.toLowerCase().includes(query.toLowerCase()) ||
-              product.category.toLowerCase().includes(query.toLowerCase()) ||
-              product.brand.toLowerCase().includes(query.toLowerCase()),
-          )
-          setProducts(filtered)
-        } else {
-          setProducts(mockProducts)
-        }
+      const response = await fetch(`/api/products?q=${encodeURIComponent(query)}`)
+      const data = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch products')
       }
+      
+      setProducts(data.products)
     } catch (error) {
       console.error("Error fetching products:", error)
+      // Initialize with empty products on error
+      setProducts([])
     } finally {
       setLoading(false)
     }
@@ -160,7 +86,12 @@ export default function HomePage() {
               Discover amazing deals on everything you need, from electronics to groceries.
             </p>
             <div className="flex space-x-4">
-              <Button className="bg-yellow-400 hover:bg-yellow-500 text-black font-semibold">Shop Now</Button>
+              <Button 
+                onClick={() => window.location.href = '/auth/login'} 
+                className="bg-yellow-400 hover:bg-yellow-500 text-black font-semibold"
+              >
+                Shop Now
+              </Button>
               <Button variant="outline" className="border-white text-white hover:bg-white hover:text-blue-600">
                 Weekly Ad
               </Button>
@@ -169,7 +100,7 @@ export default function HomePage() {
         </section>
 
         {/* Categories */}
-        <CategoriesSection categories={categories} onCategoryClick={handleCategoryClick} />
+        {/* <CategoriesSection categories={categories} onCategoryClick={handleCategoryClick} /> */}
 
         {/* Search Results Header */}
         {searchQuery && (
@@ -270,14 +201,7 @@ export default function HomePage() {
               <h4 className="font-bold mb-4">Account</h4>
               <ul className="space-y-2 text-sm">
                 <li>
-                  <a href="#" className="hover:underline">
-                    Sign In
-                  </a>
-                </li>
-                <li>
-                  <a href="#" className="hover:underline">
-                    Create Account
-                  </a>
+                  <AuthButton />
                 </li>
                 <li>
                   <a href="#" className="hover:underline">
@@ -328,3 +252,4 @@ export default function HomePage() {
     </div>
   )
 }
+
