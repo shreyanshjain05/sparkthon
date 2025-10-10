@@ -42,4 +42,5 @@ yarn-error.log*
 /backend/.venv
 
 # env file
-env
+.env
+frontend/.env.local

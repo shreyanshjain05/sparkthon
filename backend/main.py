@@ -133,7 +133,7 @@ def test_get_user_cart():
         print(f"Cart for user {test_user}:")
         print(f"  Items: {result['item_count']}")
         print(f"  Total quantity: {result['total_items']}")
-        print(f"  Total price: ${result['total_price']}")
+        print(f"  Total price: ₹{result['total_price']}")
         print(f"  Brands: {result['brands_summary']}")
         
         for item in result['items']:
@@ -213,7 +213,7 @@ def test_search_alternatives():
     print(f"Found {len(result)} alternatives for 'pasta':")
     for alt in result:
         print(f"  - {alt['brand']} {alt['item_name']} ({alt['sku']})")
-        print(f"    Price: ${alt['price']} for {alt['quantity']}")
+        print(f"    Price: ₹{alt['price']} for {alt['quantity']}")
         print(f"    Category: {alt['category']}, In stock: {alt['in_stock']}")
     
     # Test with exclusions

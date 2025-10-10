@@ -17,10 +17,11 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect,HTTPException
-import uvicorn
+from openai import OpenAI
+from langchain_openai import ChatOpenAI
 
 # Load environment variables
-load_dotenv(dotenv_path="../env")
+load_dotenv(dotenv_path="../.env")
 
 # Initialize Supabase client
 supabase = create_client(
@@ -29,15 +30,20 @@ supabase = create_client(
 )
 
 # use llm to get ingridients
-llm_ing =  ChatGroq(
-    model="deepseek-r1-distill-llama-70b",
-    temperature=0,
-    max_tokens=None,
-    reasoning_format="parsed",
-    timeout=None,
-    max_retries=2,
-)
+# llm_ing =  ChatGroq(
+#     model="deepseek-r1-distill-llama-70b",
+#     temperature=0,
+#     max_tokens=None,
+#     reasoning_format="parsed",
+#     timeout=None,
+#     max_retries=2,
+# )
 
+
+llm_ing = OpenAI(
+  base_url="https://openrouter.ai/api/v1",
+  api_key=os.getenv("OPENROUTER_API_KEY"),
+)
 # State definition
 class State(TypedDict):
     messages: Annotated[list, add_messages]
@@ -354,14 +360,18 @@ tools = [
 ]
 
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile", 
-    temperature=0,
-    max_tokens=None,
-    timeout=30,
-    max_retries=2,
-)
+# llm = ChatGroq(
+#     model="llama-3.3-70b-versatile", 
+#     temperature=0,
+#     max_tokens=None,
+#     timeout=30,
+#     max_retries=2,
+# )
 
+llm = ChatOpenAI(
+  base_url="https://openrouter.ai/api/v1",
+  api_key=os.getenv("OPENROUTER_API_KEY"),
+)
 
 # Bind tools to LLM
 llm_with_tools = llm.bind_tools(tools)
@@ -468,7 +478,7 @@ def chat_with_recipe_bot(user_id: str, thread_id: str = None):
     graph = build_graph().compile()
     
     # This config is still useful for things like recursion limits
-    config = {"recursion_limit": 50} 
+    config = {"recursion_limit": 100} 
 
     # We will manually keep track of the conversation history in this list
     messages = []
