@@ -16,9 +16,8 @@ from langchain.schema.runnable import Runnable
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect,HTTPException
-from openai import OpenAI
-from langchain_openai import ChatOpenAI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+import uvicorn
 
 # Load environment variables
 load_dotenv(dotenv_path="../.env")
@@ -29,21 +28,16 @@ supabase = create_client(
     os.getenv("SUPABASE_KEY")
 )
 
-# use llm to get ingridients
-# llm_ing =  ChatGroq(
-#     model="deepseek-r1-distill-llama-70b",
-#     temperature=0,
-#     max_tokens=None,
-#     reasoning_format="parsed",
-#     timeout=None,
-#     max_retries=2,
-# )
-
-
-llm_ing = OpenAI(
-  base_url="https://openrouter.ai/api/v1",
-  api_key=os.getenv("OPENROUTER_API_KEY"),
+# use llm to get ingredients
+llm_ing = ChatGroq(
+    model="deepseek-r1-distill-llama-70b",
+    temperature=0,
+    max_tokens=None,
+    reasoning_format="parsed",
+    timeout=None,
+    max_retries=2,
 )
+
 # State definition
 class State(TypedDict):
     messages: Annotated[list, add_messages]
@@ -65,13 +59,12 @@ def extract_recipe_ingredients(recipe_request: str) -> str:
         ("human", "{recipe_request}"),
     ])
 
-    chain: Runnable = prompt | llm_ing  # Assuming llm_ing is your initialized LLM
+    chain: Runnable = prompt | llm_ing
     result = chain.invoke({"recipe_request": recipe_request})
 
-    # Ensure the result is JSON string as expected
     try:
-        json_obj = json.loads(result)  # Validate if LLM returned valid JSON
-        return json.dumps(json_obj)    # Return as string (same as old version)
+        json_obj = json.loads(result)
+        return json.dumps(json_obj)
     except json.JSONDecodeError:
         return json.dumps({
             "recipe": "unknown",
@@ -91,19 +84,19 @@ def check_ingredient_availability(ingredient_name: str, category: Optional[str] 
         response = query.execute()
         
         if response.data:
-            result =  {
+            result = {
                 "available": True,
                 "options": response.data,
                 "count": len(response.data)
             }
-            return json.dumps(result) 
+            return json.dumps(result)
         else:
-            result =  {
+            result = {
                 "available": False,
                 "options": [],
                 "count": 0
             }
-            return json.dumps(result) 
+            return json.dumps(result)
     except Exception as e:
         result = {
             "available": False,
@@ -149,7 +142,7 @@ def get_product_details_for_comparison(skus: List[str]) -> str:
                 "price": float(item.get("price", 0)),
                 "quantity": item.get("quantity"),
                 "unit": item.get("unit"),
-                "price_per_unit": f"${float(item.get('price', 0))}/{item.get('quantity')}{item.get('unit')}",
+                "price_per_unit": f"₹{float(item.get('price', 0))}/{item.get('quantity')}{item.get('unit')}",
                 "category": item.get("category"),
                 "nutritional_info": {
                     "calories_per_100g": item.get("calories_per_100g"),
@@ -172,6 +165,7 @@ def get_product_details_for_comparison(skus: List[str]) -> str:
 def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", session_id: str = None) -> str:
     """Add a selected product to the shopping cart with session tracking. Returns a JSON string."""
     try:
+        # Verify product exists
         product_response = supabase.table('products').select('*').eq('sku', sku).single().execute()
         product = product_response.data
         if not product:
@@ -180,7 +174,16 @@ def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", sess
         if product.get('stock_quantity', 0) < quantity:
             return json.dumps({"success": False, "error": f"Insufficient stock. Only {product.get('stock_quantity')} available"})
         
-        existing = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'sku': sku, 'status': 'active'}).execute()
+        # Verify or create session_id
+        if not session_id:
+            return json.dumps({"success": False, "error": "session_id is required (foreign key constraint)"})
+        
+        # Check if session exists
+        session_check = supabase.table('cart_sessions').select('session_id').eq('session_id', session_id).execute()
+        if not session_check.data:
+            return json.dumps({"success": False, "error": f"Session {session_id} does not exist. Please create a cart session first."})
+        
+        existing = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'sku': sku, 'status': 'active', 'session_id': session_id}).execute()
         unit_price = float(product.get('price', 0))
         
         if existing.data:
@@ -192,8 +195,15 @@ def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", sess
             action = "updated"
         else:
             cart_item = {
-                'user_id': user_id, 'sku': sku, 'product_name': product.get('item_name'), 'brand': product.get('brand'),
-                'quantity': quantity, 'unit_price': unit_price, 'notes': notes, 'status': 'active', 'session_id': session_id
+                'user_id': user_id,
+                'sku': sku,
+                'product_name': product.get('item_name'),
+                'brand': product.get('brand'),
+                'quantity': quantity,
+                'unit_price': unit_price,
+                'notes': notes or '',
+                'status': 'active',
+                'session_id': session_id
             }
             response = supabase.table('shopping_carts').insert(cart_item).execute()
             action = "added"
@@ -286,34 +296,102 @@ def search_alternatives(ingredient_name: str, exclude_skus: List[str] = [], cate
         return json.dumps([])
 
 @tool
-def checkout_cart(user_id: str, shipping_address: str, delivery_date: str = None, special_instructions: str = "") -> str:
+def checkout_cart(user_id: str, shipping_address: str = "Default Address", delivery_date: str = None, special_instructions: str = "") -> str:
     """Convert active cart items to an order. Returns a JSON string."""
     try:
+        # Validate inputs
+        if not user_id:
+            return json.dumps({"success": False, "error": "User ID is required"})
+        
+        if not shipping_address or shipping_address.strip() == "":
+            shipping_address = "Default Delivery Address"
+        
+        # Fetch cart items
         cart_response = supabase.table('shopping_carts').select('*').match({'user_id': user_id, 'status': 'active'}).execute()
+        
         if not cart_response.data:
             return json.dumps({"success": False, "error": "Cart is empty"})
         
+        # Calculate totals
         total_amount = sum(float(item.get('unit_price', 0)) * item.get('quantity', 0) for item in cart_response.data)
         order_number = f"ORD-{user_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        order_data = {'user_id': user_id, 'order_number': order_number, 'total_amount': total_amount, 'order_status': 'pending', 'shipping_address': shipping_address, 'delivery_date': delivery_date, 'special_instructions': special_instructions}
+        
+        # Parse delivery_date properly (schema expects 'date' type)
+        parsed_delivery_date = None
+        if delivery_date:
+            try:
+                parsed_delivery_date = datetime.fromisoformat(delivery_date).date().isoformat()
+            except:
+                parsed_delivery_date = datetime.now().date().isoformat()
+        else:
+            parsed_delivery_date = datetime.now().date().isoformat()
+        
+        # Create order (no created_at field in schema, will use default)
+        order_data = {
+            'user_id': user_id,
+            'order_number': order_number,
+            'total_amount': round(total_amount, 2),
+            'order_status': 'pending',
+            'shipping_address': shipping_address,
+            'delivery_date': parsed_delivery_date,
+            'special_instructions': special_instructions or ''
+        }
+        
         order_response = supabase.table('orders').insert(order_data).execute()
+        
+        if not order_response.data:
+            return json.dumps({"success": False, "error": "Failed to create order"})
+        
         order_id = order_response.data[0]['id']
         
-        order_items = [{'order_id': order_id, 'sku': item.get('sku'), 'product_name': item.get('product_name'), 'brand': item.get('brand'), 'quantity': item.get('quantity'), 'unit_price': item.get('unit_price'), 'total_price': float(item.get('unit_price', 0)) * item.get('quantity', 0)} for item in cart_response.data]
+        # Create order items (DO NOT include total_price as it's a generated column)
+        order_items = [
+            {
+                'order_id': order_id,
+                'sku': item.get('sku'),
+                'product_name': item.get('product_name'),
+                'brand': item.get('brand'),
+                'quantity': item.get('quantity'),
+                'unit_price': float(item.get('unit_price'))
+            }
+            for item in cart_response.data
+        ]
+        
         supabase.table('order_items').insert(order_items).execute()
         
+        # Update cart status (add order_id as per schema foreign key)
         cart_ids = [item['id'] for item in cart_response.data]
-        supabase.table('shopping_carts').update({'status': 'purchased', 'order_id': order_id, 'updated_at': datetime.now().isoformat()}).in_('id', cart_ids).execute()
+        supabase.table('shopping_carts').update({
+            'status': 'purchased',
+            'order_id': order_id,
+            'updated_at': datetime.now().isoformat()
+        }).in_('id', cart_ids).execute()
         
+        # Update product stock
         for item in cart_response.data:
-            product_response = supabase.table('products').select('stock_quantity').eq('sku', item['sku']).single().execute()
-            new_stock = product_response.data['stock_quantity'] - item['quantity']
-            supabase.table('products').update({'stock_quantity': max(0, new_stock), 'updated_at': datetime.now().isoformat()}).eq('sku', item['sku']).execute()
+            try:
+                product_response = supabase.table('products').select('stock_quantity').eq('sku', item['sku']).single().execute()
+                new_stock = product_response.data['stock_quantity'] - item['quantity']
+                supabase.table('products').update({
+                    'stock_quantity': max(0, new_stock),
+                    'updated_at': datetime.now().isoformat()
+                }).eq('sku', item['sku']).execute()
+            except Exception as stock_error:
+                print(f"Warning: Could not update stock for SKU {item['sku']}: {stock_error}")
         
-        result = {"success": True, "order_id": order_id, "order_number": order_number, "total_amount": total_amount, "item_count": len(order_items)}
+        result = {
+            "success": True,
+            "order_id": order_id,
+            "order_number": order_number,
+            "total_amount": round(total_amount, 2),
+            "item_count": len(order_items),
+            "message": f"Order placed successfully! Order number: {order_number}"
+        }
         return json.dumps(result)
+    
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        print(f"Checkout error: {str(e)}")
+        return json.dumps({"success": False, "error": f"Checkout failed: {str(e)}"})
 
 @tool
 def get_nutrition_comparison(skus: List[str]) -> str:
@@ -340,7 +418,6 @@ def clear_expired_sessions() -> str:
         return json.dumps({"success": True, "sessions_expired": len(response.data)})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
-# --- END OF TOOL DEFINITIONS ---
 
 
 # Create the tool list for LangGraph
@@ -360,23 +437,20 @@ tools = [
 ]
 
 
-# llm = ChatGroq(
-#     model="llama-3.3-70b-versatile", 
-#     temperature=0,
-#     max_tokens=None,
-#     timeout=30,
-#     max_retries=2,
-# )
-
-llm = ChatOpenAI(
-  base_url="https://openrouter.ai/api/v1",
-  api_key=os.getenv("OPENROUTER_API_KEY"),
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0,
+    max_tokens=None,
+    timeout=30,
+    max_retries=2,
 )
 
 # Bind tools to LLM
 llm_with_tools = llm.bind_tools(tools)
 
 SYSTEM_PROMPT = """You are a helpful and highly conversational shopping assistant. Your primary goal is to guide a user through adding ingredients for a recipe to their cart, one step at a time. You MUST be conversational.
+
+When displaying prices, always use the Indian Rupee symbol (₹) instead of dollar signs.
 
 **Core Conversation Flow:**
 
@@ -388,17 +462,22 @@ SYSTEM_PROMPT = """You are a helpful and highly conversational shopping assistan
 **Rule 2: Finding Ingredient Options**
 - When the user confirms, proceed with the first ingredient. Use the `check_ingredient_availability` tool for that ONE ingredient.
 - **CRITICAL:** After the tool returns the available products, you MUST stop and present these options to the user. DO NOT move on to the next ingredient.
-- Your response should be a clear, numbered list of choices. Ask the user to pick one. Example: "I found a few options for pasta: 1. Brand A Spaghetti ($2.99), 2. Brand B Penne ($3.49). Which one would you like?"
+- Your response should be a clear, numbered list of choices with prices in ₹. Ask the user to pick one.
 
 **Rule 3: Adding to Cart**
 - When the user makes a choice, use the `add_to_cart` tool with the correct SKU and session_id.
 - **CRITICAL:** After adding the item, you MUST confirm it to the user and then propose the next step.
-- Example: "Okay, I've added Brand A Spaghetti to your cart. Shall we look for 'tomato sauce' next?"
 
-**Rule 4: Handling the Conversation**
-- Continue this process for each ingredient.
-- If an ingredient is not available, use the `search_alternatives` tool and present those.
-- Once all ingredients are handled, use `get_user_cart` to give a final summary.
+**Rule 4: Checkout**
+- When the user requests checkout, ONLY call the `checkout_cart` tool. DO NOT call get_user_cart afterwards.
+- After checkout_cart returns, parse the JSON response to check if "success" is true.
+- If success is true, display a success message with:
+  * Order number from the response
+  * Total amount in ₹ from the response
+  * Item count from the response
+  * Thank the user and confirm their order is being processed
+- If success is false, explain the error from the response.
+- NEVER call get_user_cart after checkout - the cart will be empty because items are marked as purchased.
 """
 
 def cartbot(state: State):
@@ -451,7 +530,7 @@ def build_graph():
     # Set entry point
     graph_builder.set_entry_point("agent")
 
-    # FIXED: Simplified routing - no self-loops
+    # Simplified routing - no self-loops
     graph_builder.add_conditional_edges(
         "agent",
         should_continue,
@@ -477,10 +556,8 @@ def chat_with_recipe_bot(user_id: str, thread_id: str = None):
     # Compile the graph
     graph = build_graph().compile()
     
-    # This config is still useful for things like recursion limits
-    config = {"recursion_limit": 100} 
+    config = {"recursion_limit": 50}
 
-    # We will manually keep track of the conversation history in this list
     messages = []
 
     while True:
@@ -497,22 +574,14 @@ def chat_with_recipe_bot(user_id: str, thread_id: str = None):
         if not user_input:
             continue
             
-        # 1. Add the new user message to our history
         messages.append(HumanMessage(content=user_input))
-
-        # 2. Prepare the input for the graph with the FULL message history
-        # This gives the agent the memory of the conversation.
         input_data = {"messages": messages}
 
         try:
             print("Processing...")
-            # 3. Call the graph ONCE with the full history
             result = graph.invoke(input_data, config=config)
-
-            # 4. The result contains the new history. Update our local list.
             messages = result['messages']
             
-            # 5. Find the latest AIMessage to display to the user
             latest_ai_message = messages[-1]
             if isinstance(latest_ai_message, AIMessage) and latest_ai_message.content:
                 print(f"\nAssistant: {latest_ai_message.content}")
@@ -520,31 +589,15 @@ def chat_with_recipe_bot(user_id: str, thread_id: str = None):
         except Exception as e:
             print(f"\nAn error occurred: {e}")
             print("Let's try that again.")
-            # If an error happens, remove the last user message we added
-            # so the history is clean for the next attempt.
             messages.pop()
     
     return thread_id
-# # # Main execution
-# if __name__ == "__main__":
-#     user_id = "user123"
-    
-#     # Start chat
-#     thread_id = chat_with_recipe_bot(user_id)
-
-# To build graph
 
 graph = build_graph()
-graph  = graph.compile()
-# graph_image = graph.get_graph().draw_mermaid_png()
-# with open('graph.png' , 'wb') as f:
-#     f.write(graph_image)
-
-
+graph = graph.compile()
 
 app = FastAPI(title="Simple Recipe Chatbot API")
 
-# We will use a simple list to store the history for our single, fixed user.
 conversation_history = []
 
 @app.get("/api/search")
@@ -554,7 +607,6 @@ async def search_products(q: str = ""):
         return {"products": [], "count": 0}
     
     try:
-        # Search in your products table
         response = supabase.table('products').select('*').eq('is_active', True).ilike('item_name', f'%{q}%').limit(10).execute()
         
         products = []
@@ -583,37 +635,27 @@ async def websocket_endpoint(websocket: WebSocket):
     """A single endpoint for the chatbot."""
     await websocket.accept()
     global conversation_history
-    # Reset history for each new connection for a clean start
     conversation_history = []
-
-    # await websocket.send_json({"response": "Welcome! What would you like to cook today?"})
 
     try:
         while True:
-            # 1. RECEIVE a message from the client
             data = await websocket.receive_text()
             user_input = json.loads(data).get("message")
 
             if not user_input:
                 continue
 
-            # Add the new user message to our history
             conversation_history.append(HumanMessage(content=user_input))
 
-            # Prepare the input for the graph
             graph_input = {
                 "messages": conversation_history,
-                "user_id": 'user123' # Always use the fixed user ID
+                "user_id": 'user123'
             }
 
-            # Run the graph until it finishes this turn
             final_state = graph.invoke(graph_input)
-
-            # Get the latest AI message from the final state
             ai_response = final_state["messages"][-1].content
             conversation_history = final_state["messages"]
 
-            # 2. SEND the final response back to the client
             await websocket.send_json({"response": ai_response})
 
     except WebSocketDisconnect:
@@ -621,9 +663,3 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"An error occurred: {e}")
         await websocket.send_json({"response": "Sorry, an error occurred. Please try again."})
-
-
-# --- Main entry point to run the server ---
-# if __name__ == "__main__":
-#     print("Starting FastAPI server...")
-#     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
