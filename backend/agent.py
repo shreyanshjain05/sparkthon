@@ -473,10 +473,6 @@ When displaying prices, always use the Indian Rupee symbol (₹) instead of doll
 - After checkout_cart returns, parse the JSON response to check if "success" is true.
 - If success is true, display a success message with:
   * Order number from the response
-<<<<<<< HEAD
-  * Total amount in ₹ from the response
-=======
->>>>>>> 5ccee3e (auth and stuff all done)
   * Item count from the response
   * Thank the user and confirm their order is being processed
 - If success is false, explain the error from the response.
@@ -665,8 +661,6 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Client disconnected. Chat history has been reset.")
     except Exception as e:
         print(f"An error occurred: {e}")
-<<<<<<< HEAD
+
         await websocket.send_json({"response": "Sorry, an error occurred. Please try again."})
-=======
-        await websocket.send_json({"response": "Sorry, an error occurred. Please try again."})
->>>>>>> 5ccee3e (auth and stuff all done)
+
