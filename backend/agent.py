@@ -30,7 +30,7 @@ supabase = create_client(
 
 # use llm to get ingredients
 llm_ing = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="llama-3.1-8b-instant",
     temperature=0,
     max_tokens=None,
     timeout=None,
@@ -84,9 +84,12 @@ def check_ingredient_availability(ingredient_name: str, category: Optional[str] 
     """Check if an ingredient exists in the products table and fetch available options. Returns a JSON string."""
     try:
         query = supabase.table('products').select('*').eq('is_active', True)
-        query = query.ilike('item_name', f'%{ingredient_name}%')
+        
+        # Search both item_name and category
         if category:
-            query = query.eq('category', category)
+            query = query.or_(f"item_name.ilike.%{ingredient_name}%,category.eq.{category}")
+        else:
+            query = query.or_(f"item_name.ilike.%{ingredient_name}%,category.ilike.%{ingredient_name}%")
         
         response = query.execute()
         
@@ -169,7 +172,7 @@ def get_product_details_for_comparison(skus: List[str]) -> str:
         return json.dumps([])
 
 @tool
-def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", session_id: str = None) -> str:
+def add_to_cart(user_id: str, sku: str, quantity: int = 1, notes: str = "", session_id: Optional[str] = None) -> str:
     """Add a selected product to the shopping cart with session tracking. Returns a JSON string."""
     try:
         # Verify product exists
@@ -277,14 +280,14 @@ def update_cart_quantity(user_id: str, sku: str, new_quantity: int) -> str:
         return json.dumps({"success": False, "error": str(e)})
 
 @tool
-def search_alternatives(ingredient_name: str, exclude_skus: List[str] = [], category: str = None) -> str:
+def search_alternatives(ingredient_name: str, exclude_skus: List[str] = [], category: Optional[str] = None) -> str:
     """Search for alternative products. Returns a JSON string."""
     try:
         query = supabase.table('products').select('*').eq('is_active', True)
         if category:
-            query = query.or_(f'item_name.ilike.%{ingredient_name}%,category.eq.{category}')
+            query = query.or_(f"item_name.ilike.%{ingredient_name}%,category.eq.{category}")
         else:
-            query = query.ilike('item_name', f'%{ingredient_name}%')
+            query = query.or_(f"item_name.ilike.%{ingredient_name}%,category.ilike.%{ingredient_name}%")
         if exclude_skus:
             query = query.not_.in_('sku', exclude_skus)
         query = query.gt('stock_quantity', 0)
@@ -303,7 +306,7 @@ def search_alternatives(ingredient_name: str, exclude_skus: List[str] = [], cate
         return json.dumps([])
 
 @tool
-def checkout_cart(user_id: str, shipping_address: str = "Default Address", delivery_date: str = None, special_instructions: str = "") -> str:
+def checkout_cart(user_id: str, shipping_address: str = "Default Address", delivery_date: Optional[str] = None, special_instructions: str = "") -> str:
     """Convert active cart items to an order. Returns a JSON string."""
     try:
         # Validate inputs
@@ -445,7 +448,7 @@ tools = [
 
 
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="llama-3.1-8b-instant",
     temperature=0,
     max_tokens=None,
     timeout=30,
@@ -470,6 +473,7 @@ When displaying prices, always use the Indian Rupee symbol (₹) instead of doll
 - When the user confirms, proceed with the first ingredient. Use the `check_ingredient_availability` tool for that ONE ingredient.
 - **CRITICAL:** After the tool returns the available products, you MUST stop and present these options to the user. DO NOT move on to the next ingredient.
 - Your response should be a clear, numbered list of choices with prices in ₹. Ask the user to pick one.
+- **CRITICAL:** If the tool returns no available products (empty list), DO NOT make up or hallucinate products. You MUST inform the user that the ingredient is currently out of stock or unavailable, and ask if they would like to skip it or search for something else.
 
 **Rule 3: Adding to Cart**
 - When the user makes a choice, use the `add_to_cart` tool with the correct SKU and session_id.
