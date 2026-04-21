@@ -2,7 +2,7 @@ langchain
 langgraph
 supabase
 langchain-groq
-dotenv
+python-dotenv
 psycopg-binary
 langgraph-checkpoint-postgres
 ipython
