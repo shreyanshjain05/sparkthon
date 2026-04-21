@@ -20,7 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 import uvicorn
 
 # Load environment variables
-load_dotenv(dotenv_path="../.env")
+load_dotenv()
 
 # Initialize Supabase client
 supabase = create_client(
@@ -30,10 +30,9 @@ supabase = create_client(
 
 # use llm to get ingredients
 llm_ing = ChatGroq(
-    model="deepseek-r1-distill-llama-70b",
+    model="llama-3.3-70b-versatile",
     temperature=0,
     max_tokens=None,
-    reasoning_format="parsed",
     timeout=None,
     max_retries=2,
 )
@@ -54,7 +53,7 @@ def extract_recipe_ingredients(recipe_request: str) -> str:
             "system",
             "You are a helpful assistant that extracts ingredients from the recipe mentioned by the user. "
             "Return a JSON object in the following format ONLY:\n"
-            '{"recipe": "<name_of_recipe>", "ingredients": ["ingredient1", "ingredient2", "..."]}'
+            '{{"recipe": "<name_of_recipe>", "ingredients": ["ingredient1", "ingredient2", "..."]}}'
         ),
         ("human", "{recipe_request}"),
     ])
@@ -63,7 +62,15 @@ def extract_recipe_ingredients(recipe_request: str) -> str:
     result = chain.invoke({"recipe_request": recipe_request})
 
     try:
-        json_obj = json.loads(result)
+        content = result.content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        json_obj = json.loads(content)
         return json.dumps(json_obj)
     except json.JSONDecodeError:
         return json.dumps({
